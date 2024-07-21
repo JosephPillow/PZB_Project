@@ -1,8 +1,10 @@
+import os
 import ccxt
 import pandas as pd
 import numpy as np
 import talib as ta
 import sqlite3
+from binance.client import Client
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
@@ -17,9 +19,11 @@ exchange = ccxt.binance({
             'private': 'https://testnet.binancefuture.com/fapi/v1',
         },
     },
-    'apiKey': 'your_api_key',
-    'secret': 'your_secret_key'
+    'apiKey': 'TgrMxFP77E1FH4RKcJ5rGXnulEq34h1pSP4UljAh4mag3Db5e73WsM13ALFDAXBt',
+    'secret': 'DDwKoq5qk3cYxoaAyc5hqDk6Kore07qt0nKvun5ucEJixHzOHOsCeAQPGw6OJXB8'
 })
+
+exchange.set_sandbox_mode(True)
 
 # İnceleme yapılacak kripto paralar
 symbols = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'DOGE/USDT', 'DOT/USDT', 'UNI/USDT', 'LTC/USDT', 'LINK/USDT']
@@ -40,7 +44,9 @@ def fetch_and_analyze(symbol):
     df['upper_band'], df['middle_band'], df['lower_band'] = ta.BBANDS(df['close'], timeperiod=20)
     df['ADX'] = ta.ADX(df['high'], df['low'], df['close'], timeperiod=14)
     df['stoch_k'], df['stoch_d'] = ta.STOCH(df['high'], df['low'], df['close'], fastk_period=14, slowk_period=3, slowd_period=3)
-    df['ichimoku_conversion'], df['ichimoku_base'], df['ichimoku_span_a'], df['ichimoku_span_b'] = ta.ICHIMOKU(df['high'], df['low'])
+
+    df['target'] = pd.Series([0]*len(df), dtype='int')
+    df['target'] = df['target'].replace(0, np.nan).astype('Int64')
 
     return df
 
@@ -72,13 +78,10 @@ for symbol in symbols:
             lower_band REAL,
             ADX REAL,
             stoch_k REAL,
-            stoch_d REAL,
-            ichimoku_conversion REAL,
-            ichimoku_base REAL,
-            ichimoku_span_a REAL,
-            ichimoku_span_b REAL
+            stoch_d REAL
         )
     """)
+
 
 # Verileri çekip veritabanına kaydetme
 for symbol in symbols:
@@ -94,8 +97,8 @@ def prepare_data(symbol):
     table_name = symbol.replace('/', '_')
     df = pd.read_sql(f"SELECT * FROM {table_name}", conn, parse_dates=['timestamp'])
     df.dropna(inplace=True)
+    features = ['SMA50', 'SMA200', 'EMA12', 'EMA26', 'RSI', 'MACD', 'MACD_signal', 'MACD_hist', 'upper_band', 'middle_band', 'lower_band', 'ADX', 'stoch_k', 'stoch_d']
     df['target'] = np.where(df['close'].shift(-1) > df['close'], 1, 0)  # Basit hedef değişkeni
-    features = ['SMA50', 'SMA200', 'EMA12', 'EMA26', 'RSI', 'MACD', 'MACD_signal', 'MACD_hist', 'upper_band', 'middle_band', 'lower_band', 'ADX', 'stoch_k', 'stoch_d', 'ichimoku_conversion', 'ichimoku_base', 'ichimoku_span_a', 'ichimoku_span_b']
     X = df[features]
     y = df['target']
     return X, y
@@ -160,5 +163,5 @@ while True:
         check_for_stop_loss(symbol)
     
     # Belirli bir süre bekle (örneğin, 1 saat = 3600 saniye)
-    time.sleep(3600)
+    time.sleep(300)
 
