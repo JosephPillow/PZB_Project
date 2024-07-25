@@ -7,46 +7,40 @@ import sqlite3
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 import time
+import requests
 
+# API Anahtarlarını Güvenli Bir Şekilde Alın
+api_key = os.getenv('BINANCE_API_KEY')
+api_secret = os.getenv('BINANCE_API_SECRET')
 
-# with open("test-prv-key.pem", "rb") as key_file:
-#     private_key = serialization.load_pem_private_key(
-#         key_file.read(),
-#         password=None,
-#     )
-
-    
-# with open("test-pub-key.pem", "rb") as key_file:
-#     public_key = serialization.load_pem_public_key(
-#         key_file.read()
-#     )
-
-api_key = '8lrngwZQgIs9tWgC5rgxdgTNmkygxIeQN6qYAtcrHH1y36PAMWI7IvlEZUWDn3aX'
-api_secret = 'KLmsyE9sa0ay5Y48SoLcIYwokJA9XOT2JtvkMxSD9KUezhBhS4MiAdcUj6Vd3dAN'
-
-
+# Binance API'yi Ayarlama
 exchange = ccxt.binance({
     'apiKey': api_key,
     'secret': api_secret,
     'urls': {
         'api': {
-            'public': 'https://testnet.binance.vision/api/v3/',
-            'private': 'https://testnet.binance.vision/api/v3/',
+            'public': 'https://testnet.binance.vision/api/v3',
+            'private': 'https://testnet.binance.vision/api/v3',
         },
     },
 })
 
-exchange.set_sandbox_mode(True)
+# Zaman Farkı Düzeltmesini Etkinleştirin
+exchange.options['adjust_for_time_difference'] = True
 
 # İnceleme yapılacak kripto paralar
 coins = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'DOGE/USDT', 'DOT/USDT', 'UNI/USDT', 'LTC/USDT', 'LINK/USDT']
 
 def fetch_and_analyze(coin):
-    bars = exchange.fetch_ohlcv(coin, timeframe='1m', limit=365)
+    try:
+        bars = exchange.fetch_ohlcv(coin, timeframe='1m', limit=365)
+    except Exception as e:
+        print(f"Error fetching data for {coin}: {e}")
+        return pd.DataFrame()  # Boş DataFrame döndür
+
     df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     df.set_index('timestamp', inplace=True)
@@ -101,14 +95,23 @@ for coin in coins:
 # Verileri çekip veritabanına kaydetme
 for coin in coins:
     df = fetch_and_analyze(coin)
-    table_name = coin.replace('/', '_')
-    df.to_sql(table_name, conn, if_exists='replace', index_label='timestamp')
+    if not df.empty:
+        table_name = coin.replace('/', '_')
+        df.to_sql(table_name, conn, if_exists='replace', index_label='timestamp')
 
 conn.commit()
 
 def fetch_wallet_balance():
-    balance = exchange.fetch_balance()
-    return balance['total']
+    try:
+        balance = exchange.fetch_balance()
+        return balance
+    except ccxt.NetworkError as e:
+        print(f"Network error: {e}")
+    except ccxt.ExchangeError as e:
+        print(f"Exchange error: {e}")
+    except Exception as e:
+        print(f"Error fetching wallet balance: {e}")
+    return {}
 
 def prepare_data(coin):
     table_name = coin.replace('/', '_')
@@ -127,8 +130,7 @@ def prepare_data(coin):
     df.replace([np.inf, -np.inf], np.nan, inplace=True)  # Sonsuz değerleri NaN ile değiştirme
     df.dropna(inplace=True)  # NaN değerleri tekrar temizleme
 
-    features = ['SMA50', 'SMA200', 'EMA12', 'EMA26', 'RSI', 'MACD', 'MACD_signal', 'MACD_hist', 'upper_band',
-                'middle_band', 'lower_band', 'ADX', 'stoch_k', 'stoch_d']
+    features = ['SMA50', 'SMA200', 'EMA12', 'EMA26', 'RSI', 'MACD', 'MACD_signal', 'MACD_hist', 'upper_band', 'middle_band', 'lower_band', 'ADX', 'stoch_k', 'stoch_d']
     X = df[features]
     y = df['target']
 
@@ -138,98 +140,92 @@ def prepare_data(coin):
     if np.isinf(X.values).any():
         raise ValueError("X contains infinite values")
 
-    # Veriyi ölçekleme
-    mms = MinMaxScaler()
-    mms.fit(X)
-
-    # MinMaxScaler'ın fit edilip edilmediğini kontrol etme
-    if hasattr(mms, 'data_min_'):
-        print("MinMaxScaler fit edildi.")
-    else:
-        print("MinMaxScaler fit edilmedi.")
-
-    try:
-        X_scaled = mms.transform(X)
-        print("Veri başarıyla ölçeklendi.")
-    except Exception as e:
-        print(f"Transform sırasında hata oluştu: {e}")
-        return None, None, None
-
-    return X_scaled, y, mms
+    return X, y
 
 # Model eğitimi ve testi
 models = {}
-scalers = {}
 wallets = {}
 for coin in coins:
-    X, y, mms = prepare_data(coin)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    model = LogisticRegression(max_iter=500)  # max_iter artırıldı
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
-    print(f"{coin} Model Doğruluk: {accuracy:.2f}")
-    models[coin] = model
-    scalers[coin] = mms
+    try:
+        X, y = prepare_data(coin)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        model = LogisticRegression(max_iter=5000)  # max_iter artırıldı
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+        accuracy = accuracy_score(y_test, y_pred)
+        print(f"{coin} Model Doğruluk: {accuracy:.2f}")
+        models[coin] = model
 
-    # Wallet balance tracking
-    wallets[coin] = 0  # Initialize with 0
+        # Wallet balance tracking
+        wallets[coin] = 0  # Initialize with 0
+    except Exception as e:
+        print(f"Error training model for {coin}: {e}")
 
 # Modeli Güncel Verilerle Test Etme ve Anlık Alım-Satım İşlemleri
 def execute_trades(coin):
-    df = fetch_and_analyze(coin)
-    table_name = coin.replace('/', '_')
-    df.to_sql(table_name, conn, if_exists='replace', index_label='timestamp')
+    try:
+        df = fetch_and_analyze(coin)
+        if df.empty:
+            print(f"No data to execute trades for {coin}")
+            return
 
-    # Son güncel veriyi al
-    latest_data = df.iloc[-1]
-    features = ['SMA50', 'SMA200', 'EMA12', 'EMA26', 'RSI', 'MACD', 'MACD_signal', 'MACD_hist',
-                'upper_band', 'middle_band', 'lower_band', 'ADX', 'stoch_k', 'stoch_d']
+        # Veri kontrolü
+        if df.shape[0] == 0:
+            print(f"No data available for {coin} for trading.")
+            return
 
-    # `latest_data`'nın özellikleri eksiksiz olmalı 18 features hatasından kaçınmak için
-    latest_data = latest_data[features].values.reshape(1, -1)
+        latest_data = df.iloc[-1]
+        features = ['SMA50', 'SMA200', 'EMA12', 'EMA26', 'RSI', 'MACD', 'MACD_signal', 'MACD_hist',
+                    'upper_band', 'middle_band', 'lower_band', 'ADX', 'stoch_k', 'stoch_d']
 
-    # Veriyi ölçeklendir
-    mms = scalers[coin]
-    latest_data_scaled = mms.transform(latest_data)
+        # Feature adlarını kontrol et
+        if not all(feature in latest_data.index for feature in features):
+            print(f"Missing features in the latest data for {coin}")
+            return
 
-    model = models[coin]
-    prediction = model.predict(latest_data_scaled)[0]
+        latest_data = latest_data[features].values.reshape(1, -1)
+        model = models.get(coin)
+        if model is None:
+            print(f"No model found for {coin}")
+            return
 
-    # Wallet balance
-    balance = fetch_wallet_balance()
-    wallet_coin_balance = balance.get(coin.split('/')[0], 0)  # Get balance for the coin
+        prediction = model.predict(latest_data)[0]
 
-    quantity = 0.01  # Örnek miktar, gerçek kullanımda dikkatli olun
-    if prediction == 1 and wallet_coin_balance > 0:
-        print(f"{coin} - Alım Sinyali")
-        # Alım emri gönderme
-        order = exchange.create_market_buy_order(coin, quantity)
-        print(f"Alım emri gönderildi: {order}")
-        wallets[coin] += quantity  # Update wallet balance
-    elif prediction == 0 and wallets[coin] > 0:
-        print(f"{coin} - Satım Sinyali")
-        # Satım emri gönderme
-        order = exchange.create_market_sell_order(coin, quantity)
-        print(f"Satım emri gönderildi: {order}")
-        wallets[coin] -= quantity  # Update wallet balance
+        # Wallet balance
+        balance = fetch_wallet_balance()
+        wallet_coin_balance = balance.get(coin.split('/')[0], 0)
 
+        quantity = 0.01
+        if prediction == 1 and wallet_coin_balance > 0:
+            print(f"{coin} - Alım Sinyali")
+            order = exchange.create_market_buy_order(coin, quantity)
+            print(f"Alım emri gönderildi: {order}")
+            wallets[coin] += quantity
+        elif prediction == 0 and wallets.get(coin, 0) > 0:
+            print(f"{coin} - Satım Sinyali")
+            order = exchange.create_market_sell_order(coin, quantity)
+            print(f"Satım emri gönderildi: {order}")
+            wallets[coin] -= quantity
+    except Exception as e:
+        print(f"Error executing trades for {coin}: {e}")
 def check_for_stop_loss(coin):
-    df = fetch_and_analyze(coin)
-    latest_close = df['close'].iloc[-1]
-    purchase_price = df['close'].iloc[-2]  # Örnek olarak son kapanış fiyatını kullanıyoruz
+    try:
+        df = fetch_and_analyze(coin)
+        latest_close = df['close'].iloc[-1]
+        purchase_price = df['close'].iloc[-2]  # Örnek olarak son kapanış fiyatını kullanıyoruz
 
-    # %30'dan fazla düşüş kontrolü
-    if (purchase_price - latest_close) / purchase_price > 0.30:
-        print(f"{coin} - Stop-Loss: Coin %30'dan fazla düştü. Satım yap!")
-        # Stop-loss emri gönderme
-        quantity = 0.01  # Örnek miktar, gerçek kullanımda dikkatli olun
-        order = exchange.create_market_sell_order(coin, quantity)
-        print(f"Stop-loss satım emri gönderildi: {order}")
+        # %30'dan fazla düşüş kontrolü
+        if (purchase_price - latest_close) / purchase_price > 0.30:
+            print(f"{coin} - Stop-Loss: Coin %30'dan fazla düştü. Satım yap!")
+            # Stop-loss emri gönderme
+            quantity = 0.01  # Örnek miktar, gerçek kullanımda dikkatli olun
+            order = exchange.create_market_sell_order(coin, quantity)
+            print(f"Stop-loss satım emri gönderildi: {order}")
+    except Exception as e:
+        print(f"Error checking stop-loss for {coin}: {e}")
 
 # Sürekli Çalışacak Bot Döngüsü
 while True:
-    # Tüm coinler için işlemleri gerçekleştir
     for coin in coins:
         execute_trades(coin)
         check_for_stop_loss(coin)
