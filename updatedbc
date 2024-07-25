@@ -13,8 +13,8 @@ import time
 import requests
 
 # API Anahtarlarını Güvenli Bir Şekilde Alın
-api_key = os.getenv('BINANCE_API_KEY')
-api_secret = os.getenv('BINANCE_API_SECRET')
+api_key = '8lrngwZQgIs9tWgC5rgxdgTNmkygxIeQN6qYAtcrHH1y36PAMWI7IvlEZUWDn3aX'
+api_secret = 'KLmsyE9sa0ay5Y48SoLcIYwokJA9XOT2JtvkMxSD9KUezhBhS4MiAdcUj6Vd3dAN'
 
 # Binance API'yi Ayarlama
 exchange = ccxt.binance({
@@ -30,6 +30,7 @@ exchange = ccxt.binance({
 
 # Zaman Farkı Düzeltmesini Etkinleştirin
 exchange.options['adjust_for_time_difference'] = True
+exchange.set_sandbox_mode(True)
 
 # İnceleme yapılacak kripto paralar
 coins = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'DOGE/USDT', 'DOT/USDT', 'UNI/USDT', 'LTC/USDT', 'LINK/USDT']
