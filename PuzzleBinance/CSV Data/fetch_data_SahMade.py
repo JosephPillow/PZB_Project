@@ -1,3 +1,4 @@
+#28.07.2024 -- 01.37
 import os
 import ccxt
 import pandas as pd
